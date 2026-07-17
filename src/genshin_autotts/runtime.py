@@ -9,7 +9,23 @@ from .config import AppConfig, app_home
 from .ocr import DesktopObservationSource, RapidOcrEngine
 from .pipeline import PipelineController, VoicePipeline
 from .text import DialogueStabilizer
-from …167 tokens truncated…udioCache(home / "cache", config.cache_max_mb * 1024 * 1024)
+from .tts import EdgeTtsProvider, RecordedVoiceProvider
+from .voice import VoiceRegistry
+
+
+def build_voice_pipeline(config: AppConfig, play_audio: bool | None = None) -> VoicePipeline:
+    home = app_home()
+    registry = VoiceRegistry(home / "speaker_profiles.json", config.tts_provider)
+    if config.tts_provider == "recorded":
+        manifest = (
+            Path(config.voice_pack_manifest).expanduser()
+            if config.voice_pack_manifest
+            else Path(__file__).with_name("sample_voicepack") / "manifest.json"
+        )
+        tts = RecordedVoiceProvider(manifest)
+    else:
+        tts = EdgeTtsProvider()
+    cache = AudioCache(home / "cache", config.cache_max_mb * 1024 * 1024)
     should_play = config.play_audio if play_audio is None else play_audio
     player = PygameAudioPlayer() if should_play else NullAudioPlayer()
     return VoicePipeline(
