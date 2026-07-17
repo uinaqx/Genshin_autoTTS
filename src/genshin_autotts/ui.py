@@ -70,7 +70,6 @@ class MainWindow:
         self.root.minsize(680, 520)
         self.controller = None
         self.status_var = tk.StringVar(value="就绪：请设置角色名与字幕区域")
-        self.provider_var = tk.StringVar(value=self.config.tts_provider)
         self.cache_var = tk.StringVar(value=str(self.config.cache_max_mb))
         self.test_speaker = tk.StringVar(value="派蒙")
         self.test_text = tk.StringVar(value="旅行者，我们出发吧！")
@@ -87,7 +86,7 @@ class MainWindow:
         ttk.Label(container, text="Genshin_autoTTS", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             container,
-            text="外部屏幕识别 · 固定角色音色 · 本地/在线 TTS · Opus 受限缓存",
+            text="外部屏幕识别 · 固定角色音色 · 高自然度神经人声 · 受限缓存",
             style="Hint.TLabel",
         ).pack(anchor="w", pady=(2, 14))
 
@@ -100,9 +99,10 @@ class MainWindow:
 
         settings = ttk.LabelFrame(container, text="2. 语音与存储", padding=10)
         settings.pack(fill="x", pady=10)
-        ttk.Label(settings, text="TTS：").grid(row=0, column=0, sticky="e")
-        provider = ttk.Combobox(settings, textvariable=self.provider_var, values=["sapi", "edge"], width=12, state="readonly")
-        provider.grid(row=0, column=1, sticky="w", padx=4)
+        ttk.Label(settings, text="语音：").grid(row=0, column=0, sticky="e")
+        ttk.Label(settings, text="高自然度神经人声（联网，失败不降级）").grid(
+            row=0, column=1, sticky="w", padx=4
+        )
         ttk.Label(settings, text="缓存上限 MB：").grid(row=0, column=2, sticky="e", padx=(20, 0))
         ttk.Entry(settings, textvariable=self.cache_var, width=9).grid(row=0, column=3, sticky="w", padx=4)
         ttk.Button(settings, text="保存设置", command=self._save_settings).grid(row=0, column=4, padx=8)
@@ -147,7 +147,7 @@ class MainWindow:
 
     def _save_settings(self) -> bool:
         try:
-            self.config.tts_provider = self.provider_var.get()
+            self.config.tts_provider = "edge"
             self.config.cache_max_mb = int(self.cache_var.get())
             save_config(self.config)
             self._status("设置已保存")

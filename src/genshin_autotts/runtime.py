@@ -7,17 +7,14 @@ from .config import AppConfig, app_home
 from .ocr import DesktopObservationSource, RapidOcrEngine
 from .pipeline import PipelineController, VoicePipeline
 from .text import DialogueStabilizer
-from .tts import EdgeTtsProvider, FallbackTtsProvider, SapiTtsProvider
+from .tts import EdgeTtsProvider
 from .voice import VoiceRegistry
 
 
 def build_voice_pipeline(config: AppConfig, play_audio: bool | None = None) -> VoicePipeline:
     home = app_home()
     registry = VoiceRegistry(home / "speaker_profiles.json", config.tts_provider)
-    sapi = SapiTtsProvider(config.opus_bitrate_kbps)
-    tts = sapi
-    if config.tts_provider == "edge":
-        tts = FallbackTtsProvider(EdgeTtsProvider(), sapi)
+    tts = EdgeTtsProvider()
     cache = AudioCache(home / "cache", config.cache_max_mb * 1024 * 1024)
     should_play = config.play_audio if play_audio is None else play_audio
     player = PygameAudioPlayer() if should_play else NullAudioPlayer()

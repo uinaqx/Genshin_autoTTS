@@ -20,9 +20,8 @@ class AppConfig:
     repeat_cooldown_seconds: int = 8
     speaker_region: Region | None = None
     dialogue_region: Region | None = None
-    tts_provider: str = "sapi"
+    tts_provider: str = "edge"
     cache_max_mb: int = 256
-    opus_bitrate_kbps: int = 32
     play_audio: bool = True
     interrupt_audio: bool = True
 
@@ -37,10 +36,8 @@ class AppConfig:
             raise ValueError("minimum_stable_ms must be non-negative")
         if self.cache_max_mb < 32:
             raise ValueError("cache_max_mb must be at least 32")
-        if self.opus_bitrate_kbps not in range(16, 65):
-            raise ValueError("opus_bitrate_kbps must be between 16 and 64")
-        if self.tts_provider not in {"sapi", "edge"}:
-            raise ValueError("tts_provider must be 'sapi' or 'edge'")
+        if self.tts_provider != "edge":
+            raise ValueError("tts_provider must be 'edge' (high-naturalness neural voice)")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -50,6 +47,8 @@ class AppConfig:
     def from_dict(cls, raw: dict[str, Any]) -> AppConfig:
         fields = cls.__dataclass_fields__
         filtered = {key: value for key, value in raw.items() if key in fields}
+        if filtered.get("tts_provider") == "sapi":
+            filtered["tts_provider"] = "edge"
         filtered["speaker_region"] = Region.from_value(filtered.get("speaker_region"))
         filtered["dialogue_region"] = Region.from_value(filtered.get("dialogue_region"))
         config = cls(**filtered)

@@ -13,7 +13,7 @@ from .runtime import build_voice_pipeline
 from .text import DialogueStabilizer
 
 
-def run_demo(speaker: str, text: str, provider: str = "sapi", play: bool = False):
+def run_demo(speaker: str, text: str, provider: str = "edge", play: bool = False):
     config = AppConfig(tts_provider=provider, play_audio=play)
     pipeline = build_voice_pipeline(config, play_audio=play)
     event = DialogueEvent(speaker, text, datetime.now(timezone.utc))
@@ -44,7 +44,7 @@ def _render_text(text: str, size: tuple[int, int]) -> Image.Image:
 
 
 def run_smoke() -> dict[str, str | bool | float]:
-    """Exercise real OCR, stabilization, voice assignment, TTS, Opus and cache."""
+    """Exercise real OCR, stabilization, neural voice generation and cache."""
     speaker_expected = "派蒙"
     text_expected = "旅行者我们出发吧"
     ocr = RapidOcrEngine()
@@ -66,7 +66,7 @@ def run_smoke() -> dict[str, str | bool | float]:
     if event is None:
         raise RuntimeError("Dialogue stabilizer did not emit")
 
-    config = AppConfig(tts_provider="sapi", play_audio=False, cache_max_mb=64)
+    config = AppConfig(tts_provider="edge", play_audio=False, cache_max_mb=64)
     pipeline = build_voice_pipeline(config, play_audio=False)
     artifact = pipeline.process(event)
     second = pipeline.process(event)
@@ -81,6 +81,7 @@ def run_smoke() -> dict[str, str | bool | float]:
         "text_confidence": round(text_result.confidence, 4),
         "audio_path": artifact.path,
         "codec": artifact.codec,
+        "provider": artifact.provider,
         "cache_hit_verified": second.from_cache,
         "runtime_home": str(app_home()),
     }

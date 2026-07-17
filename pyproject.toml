@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "Genshin_autoTTS contributors" }]
-keywords = ["ocr", "tts", "accessibility", "game", "opus"]
+keywords = ["ocr", "tts", "accessibility", "game", "neural-voice"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
@@ -29,7 +29,6 @@ dependencies = [
   "Pillow>=10,<13",
   "platformdirs>=4,<5",
   "pygame>=2.6,<3",
-  "pyttsx3>=2.98,<3",
   "rapidfuzz>=3.9,<4",
   "rapidocr-onnxruntime>=1.4,<2",
 ]
@@ -43,6 +42,10 @@ dev = [
 
 [project.scripts]
 genshin-autotts = "genshin_autotts.__main__:main"
+
+[project.gui-scripts]
+genshin-autotts-gui = "genshin_autotts.ui:run_gui"
+genshin-autotts-fixture = "genshin_autotts.fixture:run_fixture"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

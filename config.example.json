@@ -6,9 +6,8 @@
   "repeat_cooldown_seconds": 8,
   "speaker_region": null,
   "dialogue_region": null,
-  "tts_provider": "sapi",
+  "tts_provider": "edge",
   "cache_max_mb": 256,
-  "opus_bitrate_kbps": 32,
   "play_audio": true,
   "interrupt_audio": true
 }

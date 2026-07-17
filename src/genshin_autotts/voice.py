@@ -13,13 +13,8 @@ EDGE_PALETTE = [
     VoiceProfile("calm_female", "edge", "zh-CN-XiaoyiNeural", "female", "adult", "calm", -2),
     VoiceProfile("young_male", "edge", "zh-CN-YunxiNeural", "male", "young", "lively", 3),
     VoiceProfile("steady_male", "edge", "zh-CN-YunyangNeural", "male", "adult", "steady", -4),
-]
-
-SAPI_PALETTE = [
-    VoiceProfile("sapi_bright", "sapi", "", "female", "young", "bright", 8),
-    VoiceProfile("sapi_calm", "sapi", "", "female", "adult", "calm", -6),
-    VoiceProfile("sapi_young", "sapi", "", "male", "young", "lively", 4),
-    VoiceProfile("sapi_steady", "sapi", "", "male", "adult", "steady", -10),
+    VoiceProfile("passionate_male", "edge", "zh-CN-YunjianNeural", "male", "adult", "passionate", 2),
+    VoiceProfile("cute_male", "edge", "zh-CN-YunxiaNeural", "male", "young", "cute", 6),
 ]
 
 KNOWN_HINTS = {
@@ -32,7 +27,7 @@ KNOWN_HINTS = {
 
 
 class VoiceRegistry:
-    def __init__(self, path: Path, provider: str = "sapi") -> None:
+    def __init__(self, path: Path, provider: str = "edge") -> None:
         self.path = path
         self.provider = provider
         self._profiles: dict[str, VoiceProfile] = {}
@@ -57,7 +52,7 @@ class VoiceRegistry:
         if current is not None and current.provider == self.provider:
             return current
 
-        palette = EDGE_PALETTE if self.provider == "edge" else SAPI_PALETTE
+        palette = EDGE_PALETTE
         hint = KNOWN_HINTS.get(speaker)
         candidates = palette
         if hint:
@@ -78,6 +73,6 @@ class VoiceRegistry:
         return profile
 
     def set_provider(self, provider: str) -> None:
-        if provider not in {"sapi", "edge"}:
+        if provider != "edge":
             raise ValueError(provider)
         self.provider = provider

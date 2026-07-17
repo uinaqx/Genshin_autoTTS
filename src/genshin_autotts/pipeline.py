@@ -80,6 +80,7 @@ class PipelineController:
         self._capture_thread: threading.Thread | None = None
         self._speech_thread: threading.Thread | None = None
         self._queue: queue.Queue[DialogueEvent | None] = queue.Queue(maxsize=4)
+        self._last_observation_summary: str | None = None
 
     @property
     def running(self) -> bool:
@@ -89,6 +90,7 @@ class PipelineController:
         if self.running:
             return
         self._stop.clear()
+        self._last_observation_summary = None
         self.voice_pipeline.play_audio = self._play_audio_configured
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._speech_thread = threading.Thread(target=self._speech_loop, daemon=True)
@@ -104,6 +106,12 @@ class PipelineController:
         except queue.Full:
             pass
         self.voice_pipeline.player.stop()
+        current = threading.current_thread()
+        for worker in (self._capture_thread, self._speech_thread):
+            if worker is not None and worker is not current:
+                worker.join(timeout=1.0)
+        self._capture_thread = None
+        self._speech_thread = None
         self.status("识别已停止")
 
     def _capture_loop(self) -> None:
@@ -111,7 +119,12 @@ class PipelineController:
             started = time.monotonic()
             try:
                 observation = self.source.read()
-                self.status(f"OCR：{observation.speaker}｜{observation.text[:40]}")
+                if self._stop.is_set():
+                    break
+                summary = f"OCR：{observation.speaker}｜{observation.text[:40]}"
+                if summary != self._last_observation_summary:
+                    self.status(summary)
+                    self._last_observation_summary = summary
                 event = self.stabilizer.observe(observation)
                 if event:
                     try:
@@ -134,6 +147,8 @@ class PipelineController:
             except queue.Empty:
                 continue
             if event is None:
+                return
+            if self._stop.is_set():
                 return
             try:
                 self.status(f"生成语音：{event.speaker}：{event.text}")
