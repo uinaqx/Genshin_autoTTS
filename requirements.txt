@@ -1,0 +1,10 @@
+edge-tts>=7.0,<8
+imageio-ffmpeg>=0.6,<1
+mss>=9,<11
+numpy>=1.26,<3
+Pillow>=10,<13
+platformdirs>=4,<5
+pygame>=2.6,<3
+pyttsx3>=2.98,<3
+rapidfuzz>=3.9,<4
+rapidocr-onnxruntime>=1.4,<2

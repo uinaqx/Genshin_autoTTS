@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genshin-autotts"
+version = "0.1.0"
+description = "Screen OCR driven, lightweight automatic voice-over companion for games"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Genshin_autoTTS contributors" }]
+keywords = ["ocr", "tts", "accessibility", "game", "opus"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "edge-tts>=7.0,<8",
+  "imageio-ffmpeg>=0.6,<1",
+  "mss>=9,<11",
+  "numpy>=1.26,<3",
+  "Pillow>=10,<13",
+  "platformdirs>=4,<5",
+  "pygame>=2.6,<3",
+  "pyttsx3>=2.98,<3",
+  "rapidfuzz>=3.9,<4",
+  "rapidocr-onnxruntime>=1.4,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "pytest-cov>=5,<7",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+genshin-autotts = "genshin_autotts.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
