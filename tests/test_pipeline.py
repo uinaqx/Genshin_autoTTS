@@ -11,10 +11,11 @@ from genshin_autotts.voice import VoiceRegistry
 
 class FakeTts:
     name = "fake"
+    cache_namespace = name
 
-    def synthesize(self, text, profile, target_base):
+    def synthesize(self, event, profile, target_base):
         path = target_base.with_suffix(".opus")
-        path.write_bytes((profile.profile_id + text).encode("utf-8"))
+        path.write_bytes((profile.profile_id + event.text).encode("utf-8"))
         return path, "opus", self.name
 
 

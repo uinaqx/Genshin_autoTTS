@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "pack_id": "fsdd-human-diagnostic-sample",
+  "pack_version": "1.0.10",
+  "license": "CC-BY-SA-4.0",
+  "source_url": "https://github.com/Jakobovski/free-spoken-digit-dataset",
+  "entries": [
+    {
+      "speaker": "真人示例",
+      "text": "zero",
+      "path": "audio/jackson-zero.wav",
+      "sha256": "eea86018ce1730baaf7f5dd6ec88c1f727dd90203521a9115b489310a248ea05",
+      "codec": "wav",
+      "recorded_by": "Jackson",
+      "source_url": "https://github.com/Jakobovski/free-spoken-digit-dataset/blob/v1.0.10/recordings/0_jackson_0.wav"
+    }
+  ]
+}

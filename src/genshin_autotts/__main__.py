@@ -17,11 +17,12 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command")
     sub.add_parser("gui", help="启动桌面界面")
     demo = sub.add_parser("demo", help="不截图，直接测试音色、TTS、缓存与播放")
-    demo.add_argument("--speaker", default="派蒙")
-    demo.add_argument("--text", default="旅行者，我们出发吧！")
-    demo.add_argument("--provider", choices=["edge"], default="edge")
+    demo.add_argument("--speaker", default="真人示例")
+    demo.add_argument("--text", default="zero")
+    demo.add_argument("--provider", choices=["recorded", "edge"], default="recorded")
+    demo.add_argument("--voice-pack", help="真人录音包 manifest.json 路径")
     demo.add_argument("--play", action="store_true")
-    sub.add_parser("smoke", help="运行真实 OCR + 神经人声 + 缓存冒烟测试")
+    sub.add_parser("smoke", help="运行真实 OCR + 真人录音 + 缓存冒烟测试")
     sub.add_parser("fixture", help="启动可供屏幕框选的游戏字幕测试场景")
     sub.add_parser("config", help="显示运行时配置和数据目录")
     return result
@@ -34,7 +35,13 @@ def main(argv: list[str] | None = None) -> int:
         run_gui()
         return 0
     if command == "demo":
-        artifact = run_demo(args.speaker, args.text, args.provider, args.play)
+        artifact = run_demo(
+            args.speaker,
+            args.text,
+            args.provider,
+            args.play,
+            args.voice_pack,
+        )
         print(json.dumps(artifact.__dict__, ensure_ascii=False, indent=2))
         return 0
     if command == "smoke":

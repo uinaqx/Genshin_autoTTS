@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 from ctypes import windll
 from datetime import datetime, timezone
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .cache import AudioCache
 from .config import app_home, load_config, save_config
@@ -64,15 +64,17 @@ class RegionSelector:
 class MainWindow:
     def __init__(self) -> None:
         self.config = load_config()
+        self.config.tts_provider = "recorded"
         self.root = tk.Tk()
         self.root.title("Genshin_autoTTS")
-        self.root.geometry("760x580")
-        self.root.minsize(680, 520)
+        self.root.geometry("860x640")
+        self.root.minsize(760, 580)
         self.controller = None
         self.status_var = tk.StringVar(value="就绪：请设置角色名与字幕区域")
         self.cache_var = tk.StringVar(value=str(self.config.cache_max_mb))
-        self.test_speaker = tk.StringVar(value="派蒙")
-        self.test_text = tk.StringVar(value="旅行者，我们出发吧！")
+        self.voice_pack_var = tk.StringVar(value=self.config.voice_pack_manifest or "")
+        self.test_speaker = tk.StringVar(value="真人示例")
+        self.test_text = tk.StringVar(value="zero")
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -86,7 +88,7 @@ class MainWindow:
         ttk.Label(container, text="Genshin_autoTTS", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             container,
-            text="外部屏幕识别 · 固定角色音色 · 高自然度神经人声 · 受限缓存",
+            text="外部屏幕识别 · 真人录音严格匹配 · 缺失拒绝合成 · 受限缓存",
             style="Hint.TLabel",
         ).pack(anchor="w", pady=(2, 14))
 
@@ -100,13 +102,25 @@ class MainWindow:
         settings = ttk.LabelFrame(container, text="2. 语音与存储", padding=10)
         settings.pack(fill="x", pady=10)
         ttk.Label(settings, text="语音：").grid(row=0, column=0, sticky="e")
-        ttk.Label(settings, text="高自然度神经人声（联网，失败不降级）").grid(
+        ttk.Label(settings, text="真人录音严格模式（无匹配时不播放合成音）").grid(
             row=0, column=1, sticky="w", padx=4
         )
         ttk.Label(settings, text="缓存上限 MB：").grid(row=0, column=2, sticky="e", padx=(20, 0))
         ttk.Entry(settings, textvariable=self.cache_var, width=9).grid(row=0, column=3, sticky="w", padx=4)
         ttk.Button(settings, text="保存设置", command=self._save_settings).grid(row=0, column=4, padx=8)
         ttk.Button(settings, text="清空语音缓存", command=self._clear_cache).grid(row=0, column=5, padx=4)
+        ttk.Label(settings, text="录音包清单：").grid(row=1, column=0, sticky="e", pady=(8, 0))
+        ttk.Entry(settings, textvariable=self.voice_pack_var, width=61).grid(
+            row=1, column=1, columnspan=4, sticky="ew", padx=4, pady=(8, 0)
+        )
+        ttk.Button(settings, text="选择…", command=self._select_voice_pack).grid(
+            row=1, column=5, padx=4, pady=(8, 0)
+        )
+        ttk.Label(
+            settings,
+            text="留空使用内置 11 KB 真人诊断样本；正式使用请选择自己的 manifest.json",
+            style="Hint.TLabel",
+        ).grid(row=2, column=1, columnspan=5, sticky="w", padx=4, pady=(3, 0))
 
         controls = ttk.LabelFrame(container, text="3. 运行", padding=10)
         controls.pack(fill="x")
@@ -147,7 +161,8 @@ class MainWindow:
 
     def _save_settings(self) -> bool:
         try:
-            self.config.tts_provider = "edge"
+            self.config.tts_provider = "recorded"
+            self.config.voice_pack_manifest = self.voice_pack_var.get().strip() or None
             self.config.cache_max_mb = int(self.cache_var.get())
             save_config(self.config)
             self._status("设置已保存")
@@ -155,6 +170,14 @@ class MainWindow:
         except Exception as exc:
             messagebox.showerror("设置错误", str(exc))
             return False
+
+    def _select_voice_pack(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="选择真人录音包清单",
+            filetypes=[("JSON 清单", "*.json"), ("所有文件", "*.*")],
+        )
+        if selected:
+            self.voice_pack_var.set(selected)
 
     def _start(self) -> None:
         try:

@@ -48,6 +48,16 @@ class VoiceRegistry:
         temporary.replace(self.path)
 
     def resolve(self, speaker: str) -> VoiceProfile:
+        if self.provider == "recorded":
+            digest = sha256(speaker.encode("utf-8")).hexdigest()[:16]
+            return VoiceProfile(
+                f"recorded_{digest}",
+                "recorded",
+                speaker,
+                "human",
+                "unknown",
+                "recorded",
+            )
         current = self._profiles.get(speaker)
         if current is not None and current.provider == self.provider:
             return current
@@ -73,6 +83,6 @@ class VoiceRegistry:
         return profile
 
     def set_provider(self, provider: str) -> None:
-        if provider != "edge":
+        if provider not in {"recorded", "edge"}:
             raise ValueError(provider)
         self.provider = provider

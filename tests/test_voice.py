@@ -36,3 +36,11 @@ def test_legacy_machine_profile_is_reassigned(tmp_path) -> None:
     )
     registry = VoiceRegistry(path, "edge")
     assert registry.resolve("派蒙").provider == "edge"
+
+
+def test_recorded_mode_uses_human_profile_without_generating_voice_mapping(tmp_path) -> None:
+    path = tmp_path / "profiles.json"
+    profile = VoiceRegistry(path, "recorded").resolve("真人示例")
+    assert profile.provider == "recorded"
+    assert profile.voice == "真人示例"
+    assert not path.exists()

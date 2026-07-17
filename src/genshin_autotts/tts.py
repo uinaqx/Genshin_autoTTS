@@ -1,29 +1,199 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-from .models import VoiceProfile
+from .models import DialogueEvent, VoiceProfile
+from .text import normalize_speaker, normalize_text
 
 
 class TtsProvider(Protocol):
     name: str
+    cache_namespace: str
 
     def synthesize(
-        self, text: str, profile: VoiceProfile, target_base: Path
+        self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
     ) -> tuple[Path, str, str]: ...
 
 
+class RecordingNotFoundError(RuntimeError):
+    """Raised when strict human-recording mode has no exact matching line."""
+
+
+@dataclass(frozen=True)
+class RecordingEntry:
+    speaker: str
+    text: str
+    sha256: str
+    codec: str
+    path: str | None = None
+    url: str | None = None
+    recorded_by: str = ""
+    source_url: str = ""
+
+
+class RecordedVoiceProvider:
+    """Resolve exact dialogue lines to verified recordings made by real people.
+
+    Audio is copied or downloaded only after its SHA-256 digest matches the
+    manifest. Missing entries are fatal by design: this provider never invokes
+    a synthesizer and never falls back to a machine-generated voice.
+    """
+
+    name = "recorded-human"
+    _allowed_codecs = {"wav", "mp3", "ogg", "opus"}
+
+    def __init__(
+        self,
+        manifest_path: Path,
+        *,
+        timeout_seconds: int = 30,
+        max_download_bytes: int = 20 * 1024 * 1024,
+    ) -> None:
+        self.manifest_path = manifest_path.resolve()
+        self.timeout_seconds = timeout_seconds
+        self.max_download_bytes = max_download_bytes
+        raw_bytes = self.manifest_path.read_bytes()
+        raw = json.loads(raw_bytes.decode("utf-8"))
+        if raw.get("format_version") != 1:
+            raise ValueError("真人录音包 format_version 必须为 1")
+        self.pack_id = str(raw.get("pack_id", "")).strip()
+        self.pack_version = str(raw.get("pack_version", "")).strip()
+        self.license = str(raw.get("license", "")).strip()
+        if not self.pack_id or not self.pack_version or not self.license:
+            raise ValueError("真人录音包必须声明 pack_id、pack_version 和 license")
+        self.cache_namespace = (
+            f"{self.name}:{self.pack_id}:{self.pack_version}:"
+            f"{sha256(raw_bytes).hexdigest()[:16]}"
+        )
+        self._entries: dict[tuple[str, str], RecordingEntry] = {}
+        for item in raw.get("entries", []):
+            entry = self._parse_entry(item)
+            key = self._key(entry.speaker, entry.text)
+            if key in self._entries:
+                raise ValueError(f"真人录音包存在重复台词：{entry.speaker}：{entry.text}")
+            self._entries[key] = entry
+        if not self._entries:
+            raise ValueError("真人录音包没有任何 entries")
+
+    def _parse_entry(self, item: object) -> RecordingEntry:
+        if not isinstance(item, dict):
+            raise ValueError("真人录音包 entries 必须是对象数组")
+        entry = RecordingEntry(
+            speaker=str(item.get("speaker", "")).strip(),
+            text=str(item.get("text", "")).strip(),
+            sha256=str(item.get("sha256", "")).lower().strip(),
+            codec=str(item.get("codec", "")).lower().lstrip(".").strip(),
+            path=str(item["path"]).strip() if item.get("path") else None,
+            url=str(item["url"]).strip() if item.get("url") else None,
+            recorded_by=str(item.get("recorded_by", "")).strip(),
+            source_url=str(item.get("source_url", "")).strip(),
+        )
+        if not entry.speaker or not entry.text:
+            raise ValueError("真人录音条目必须声明 speaker 和 text")
+        if len(entry.sha256) != 64 or any(c not in "0123456789abcdef" for c in entry.sha256):
+            raise ValueError(f"真人录音 SHA-256 无效：{entry.speaker}：{entry.text}")
+        if entry.codec not in self._allowed_codecs:
+            raise ValueError(f"不支持的真人录音编码：{entry.codec}")
+        if bool(entry.path) == bool(entry.url):
+            raise ValueError("真人录音条目必须且只能提供 path 或 url")
+        if entry.url and urlparse(entry.url).scheme != "https":
+            raise ValueError("远程真人录音只允许 HTTPS URL")
+        return entry
+
+    @staticmethod
+    def _key(speaker: str, text: str) -> tuple[str, str]:
+        return normalize_speaker(speaker), normalize_text(text)
+
+    def synthesize(
+        self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
+    ) -> tuple[Path, str, str]:
+        del profile
+        entry = self._entries.get(self._key(event.speaker, event.text))
+        if entry is None:
+            raise RecordingNotFoundError(
+                f"真人录音包中没有匹配台词：{event.speaker}：{event.text}。"
+                "严格模式已拒绝使用任何合成语音替代。"
+            )
+        target = target_base.with_suffix(f".{entry.codec}")
+        temporary = target.with_suffix(target.suffix + ".part")
+        target.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
+        try:
+            if entry.path:
+                source = self._resolve_local(entry.path)
+                if source.stat().st_size > self.max_download_bytes:
+                    raise RuntimeError("真人录音超过单文件大小上限")
+                shutil.copyfile(source, temporary)
+            else:
+                self._download(entry.url or "", temporary)
+            actual_digest = sha256(temporary.read_bytes()).hexdigest()
+            if actual_digest != entry.sha256:
+                raise RuntimeError(
+                    f"真人录音完整性校验失败：期望 {entry.sha256}，实际 {actual_digest}"
+                )
+            if temporary.stat().st_size < 44:
+                raise RuntimeError("真人录音文件为空或损坏")
+            temporary.replace(target)
+            return target, entry.codec, self.name
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+            raise
+
+    def _resolve_local(self, relative_path: str) -> Path:
+        if Path(relative_path).is_absolute():
+            raise ValueError("真人录音包中的 path 必须是相对路径")
+        root = self.manifest_path.parent.resolve()
+        source = (root / relative_path).resolve()
+        if root != source and root not in source.parents:
+            raise ValueError("真人录音路径越出了录音包目录")
+        if not source.is_file():
+            raise FileNotFoundError(f"真人录音文件不存在：{source}")
+        return source
+
+    def _download(self, url: str, target: Path) -> None:
+        request = Request(
+            url,
+            headers={"User-Agent": "GenshinAutoTTS/0.2 (strict recorded-human mode)"},
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response, target.open("wb") as out:
+            final_url = response.geturl()
+            if urlparse(final_url).scheme != "https":
+                raise RuntimeError("真人录音下载被重定向到非 HTTPS 地址")
+            length = response.headers.get("Content-Length")
+            if length and int(length) > self.max_download_bytes:
+                raise RuntimeError("真人录音超过单文件下载上限")
+            total = 0
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > self.max_download_bytes:
+                    raise RuntimeError("真人录音超过单文件下载上限")
+                out.write(chunk)
+
+
 class EdgeTtsProvider:
+    """Optional synthetic neural voice mode; never used by recorded mode."""
+
     name = "edge"
+    cache_namespace = name
 
     def __init__(self, timeout_seconds: int = 35, retries: int = 2) -> None:
         self.timeout_seconds = timeout_seconds
         self.retries = retries
 
     def synthesize(
-        self, text: str, profile: VoiceProfile, target_base: Path
+        self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
     ) -> tuple[Path, str, str]:
         import edge_tts
 
@@ -33,7 +203,9 @@ class EdgeTtsProvider:
         async def create() -> None:
             rate = f"{profile.rate_percent:+d}%"
             volume = f"{profile.volume_percent:+d}%"
-            communicate = edge_tts.Communicate(text, profile.voice, rate=rate, volume=volume)
+            communicate = edge_tts.Communicate(
+                event.text, profile.voice, rate=rate, volume=volume
+            )
             await communicate.save(str(mp3_path))
 
         last_error: Exception | None = None
@@ -48,6 +220,6 @@ class EdgeTtsProvider:
 
         detail = f"：{last_error}" if last_error else ""
         raise RuntimeError(
-            "高自然度神经人声生成失败，已拒绝回退到传统机器音。请检查网络后重试"
+            "神经合成语音生成失败，已拒绝回退到传统机器音。请检查网络后重试"
             f"{detail}"
         )

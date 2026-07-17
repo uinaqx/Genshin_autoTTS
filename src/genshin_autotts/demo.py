@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,11 +14,27 @@ from .runtime import build_voice_pipeline
 from .text import DialogueStabilizer
 
 
-def run_demo(speaker: str, text: str, provider: str = "edge", play: bool = False):
-    config = AppConfig(tts_provider=provider, play_audio=play)
+def run_demo(
+    speaker: str,
+    text: str,
+    provider: str = "recorded",
+    play: bool = False,
+    voice_pack_manifest: str | None = None,
+):
+    config = AppConfig(
+        tts_provider=provider,
+        play_audio=play,
+        voice_pack_manifest=voice_pack_manifest,
+    )
     pipeline = build_voice_pipeline(config, play_audio=play)
     event = DialogueEvent(speaker, text, datetime.now(timezone.utc))
-    return pipeline.process(event)
+    artifact = pipeline.process(event)
+    if play:
+        import pygame
+
+        while pygame.mixer.music.get_busy():
+            time.sleep(0.05)
+    return artifact
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -44,9 +61,9 @@ def _render_text(text: str, size: tuple[int, int]) -> Image.Image:
 
 
 def run_smoke() -> dict[str, str | bool | float]:
-    """Exercise real OCR, stabilization, neural voice generation and cache."""
-    speaker_expected = "派蒙"
-    text_expected = "旅行者我们出发吧"
+    """Exercise real OCR, stabilization, verified human recording and cache."""
+    speaker_expected = "真人示例"
+    text_expected = "zero"
     ocr = RapidOcrEngine()
     speaker_result = ocr.recognize(_render_text(speaker_expected, (500, 120)))
     text_result = ocr.recognize(_render_text(text_expected, (900, 160)))
@@ -66,7 +83,7 @@ def run_smoke() -> dict[str, str | bool | float]:
     if event is None:
         raise RuntimeError("Dialogue stabilizer did not emit")
 
-    config = AppConfig(tts_provider="edge", play_audio=False, cache_max_mb=64)
+    config = AppConfig(tts_provider="recorded", play_audio=False, cache_max_mb=64)
     pipeline = build_voice_pipeline(config, play_audio=False)
     artifact = pipeline.process(event)
     second = pipeline.process(event)

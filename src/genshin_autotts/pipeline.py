@@ -42,14 +42,15 @@ class VoicePipeline:
 
     def process(self, event: DialogueEvent) -> AudioArtifact:
         profile = self.registry.resolve(event.speaker)
-        key = audio_cache_key(event, profile.profile_id, self.tts.name)
+        provider_key = getattr(self.tts, "cache_namespace", self.tts.name)
+        key = audio_cache_key(event, profile.profile_id, provider_key)
         cached = self.cache.get(key)
         if cached:
             path, codec, provider = cached
             artifact = AudioArtifact(str(path), codec, provider, key, True)
         else:
             target_base = self.cache.temporary_path(key, "")
-            path, codec, actual_provider = self.tts.synthesize(event.text, profile, target_base)
+            path, codec, actual_provider = self.tts.synthesize(event, profile, target_base)
             final_path = self.cache.put(key, path, codec, actual_provider)
             artifact = AudioArtifact(str(final_path), codec, actual_provider, key, False)
         if self.play_audio:
