@@ -1,7 +1,8 @@
 import json
+import sys
 
 from genshin_autotts.models import Region
-from genshin_autotts.ui import MainWindow, format_region, voice_pack_summary
+from genshin_autotts.ui import MainWindow, fixture_command, format_region, voice_pack_summary
 
 
 def test_region_summary_is_readable() -> None:
@@ -23,6 +24,14 @@ def test_voice_pack_summary_reports_manifest(tmp_path) -> None:
         encoding="utf-8",
     )
     assert voice_pack_summary(str(manifest)) == "world-quest-pack  ·  2026.07  ·  2 条录音"
+
+
+def test_fixture_command_supports_source_and_frozen_builds(monkeypatch) -> None:
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert fixture_command() == [sys.executable, "-m", "genshin_autotts", "fixture"]
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert fixture_command() == [sys.executable, "--fixture"]
 
 
 def test_formal_window_builds_without_clipped_controls(tmp_path, monkeypatch) -> None:

@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+    paths:
+      - "release-manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and build tools
+        run: python -m pip install -e ".[build]"
+      - name: Install Inno Setup
+        run: winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
+      - name: Resolve release metadata
+        id: release
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw -Encoding UTF8 release-manifest.json | ConvertFrom-Json
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $env:GITHUB_REF_NAME.TrimStart("v")
+          } else {
+            $manifest.version
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "title=$($manifest.title)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($manifest.prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Build installer and portable package
+        shell: pwsh
+        run: |
+          .\scripts\build_release.ps1 -Version "${{ steps.release.outputs.version }}" -Python "python"
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.release.outputs.version }}
+          name: ${{ steps.release.outputs.title }}
+          body_path: RELEASE_NOTES.md
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          files: |
+            build/release/Genshin_autoTTS-Setup-x64.exe
+            build/release/Genshin_autoTTS-Portable-x64.zip
+            build/release/SHA256SUMS.txt
