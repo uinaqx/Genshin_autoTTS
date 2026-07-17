@@ -1,9 +1,16 @@
 from genshin_autotts.models import DialogueObservation
-from genshin_autotts.text import DialogueStabilizer, normalize_speaker, normalize_text
+from genshin_autotts.text import (
+    DialogueStabilizer,
+    normalize_match_text,
+    normalize_speaker,
+    normalize_text,
+)
 
 
 def test_normalization() -> None:
     assert normalize_text("  你 好… <color=x>旅行者</color> ") == "你好...旅行者"
+    assert normalize_text("这个嘛···被打断了。") == "这个嘛...被打断了"
+    assert normalize_match_text("这个嘛···被打断了。") == "这个嘛被打断了"
     assert normalize_speaker("???") == "旁白"
     assert normalize_speaker(" 派蒙：") == "派蒙"
 

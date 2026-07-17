@@ -83,6 +83,70 @@ def test_recorded_provider_refuses_missing_line_without_synthetic_fallback(tmp_p
     assert not list(tmp_path.glob("missing.*"))
 
 
+def test_recorded_provider_safely_corrects_one_ocr_omission_in_long_line(tmp_path) -> None:
+    source = tmp_path / "line.wav"
+    digest = _write_wav(source)
+    manifest = _write_manifest(
+        tmp_path,
+        digest,
+        speaker="绮良良",
+        text="没来得及修缮的房子，连我都不敢睡在里面呢，一不留神塌下来可就糟了。",
+    )
+    provider = RecordedVoiceProvider(manifest)
+    event = _event(
+        speaker="绮良良",
+        text="没来得及修的房子，连我都不敢睡在里面呢，一不留神塌下来可就糟了。",
+    )
+
+    path, codec, origin = provider.synthesize(event, _profile(), tmp_path / "corrected")
+
+    assert path.read_bytes() == source.read_bytes()
+    assert codec == "wav"
+    assert origin == "recorded-human"
+
+
+def test_recorded_provider_refuses_ambiguous_ocr_correction(tmp_path) -> None:
+    source = tmp_path / "line.wav"
+    digest = _write_wav(source)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "pack_id": "ambiguous-pack",
+                "pack_version": "1",
+                "license": "CC0-1.0",
+                "entries": [
+                    {
+                        "speaker": "赛芭",
+                        "text": "村子北面的花圃需要一位热心的旅人帮忙照看",
+                        "path": "line.wav",
+                        "sha256": digest,
+                        "codec": "wav",
+                    },
+                    {
+                        "speaker": "赛芭",
+                        "text": "村子北面的菜圃需要一位热心的旅人帮忙照看",
+                        "path": "line.wav",
+                        "sha256": digest,
+                        "codec": "wav",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    provider = RecordedVoiceProvider(manifest)
+    event = _event(
+        speaker="赛芭",
+        text="村子北面的苗圃需要一位热心的旅人帮忙照看",
+    )
+
+    with pytest.raises(RecordingNotFoundError):
+        provider.synthesize(event, _profile(), tmp_path / "ambiguous")
+
+
 def test_recorded_provider_rejects_tampered_audio(tmp_path) -> None:
     source = tmp_path / "line.wav"
     _write_wav(source)

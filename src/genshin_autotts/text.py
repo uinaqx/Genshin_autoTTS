@@ -13,15 +13,19 @@ from .models import DialogueEvent, DialogueObservation
 
 _TAG_PATTERN = re.compile(r"<[^>]+>|\{[^}]+\}")
 _SPACE_PATTERN = re.compile(r"\s+")
+_OCR_ELLIPSIS_PATTERN = re.compile(r"[·•]{2,}")
+_DOT_RUN_PATTERN = re.compile(r"\.{2,}")
 
 
 def normalize_text(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "")
     value = _TAG_PATTERN.sub("", value)
+    value = _OCR_ELLIPSIS_PATTERN.sub("...", value)
     value = value.replace("…", "...").replace("—", "-")
+    value = _DOT_RUN_PATTERN.sub("...", value)
     value = value.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     value = _SPACE_PATTERN.sub("", value)
-    return value.strip("|丨_ ")
+    return value.strip("|丨_ ").rstrip("。.")
 
 
 def normalize_speaker(value: str) -> str:
@@ -29,6 +33,17 @@ def normalize_speaker(value: str) -> str:
     if value in {"", "?", "??", "???", "未知", "..."}:
         return "旁白"
     return value
+
+
+def normalize_match_text(value: str) -> str:
+    """Canonical text used only for conservative long-line OCR correction."""
+
+    normalized = normalize_text(value)
+    return "".join(
+        character
+        for character in normalized
+        if not unicodedata.category(character).startswith("P")
+    )
 
 
 @dataclass

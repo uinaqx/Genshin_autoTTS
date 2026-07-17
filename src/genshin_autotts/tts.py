@@ -10,8 +10,10 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from rapidfuzz.fuzz import ratio
+
 from .models import DialogueEvent, VoiceProfile
-from .text import normalize_speaker, normalize_text
+from .text import normalize_match_text, normalize_speaker, normalize_text
 
 
 class TtsProvider(Protocol):
@@ -24,7 +26,7 @@ class TtsProvider(Protocol):
 
 
 class RecordingNotFoundError(RuntimeError):
-    """Raised when strict human-recording mode has no exact matching line."""
+    """Raised when strict human-recording mode has no safe matching line."""
 
 
 @dataclass(frozen=True)
@@ -40,11 +42,13 @@ class RecordingEntry:
 
 
 class RecordedVoiceProvider:
-    """Resolve exact dialogue lines to verified recordings made by real people.
+    """Resolve dialogue lines to verified recordings made by real people.
 
     Audio is copied or downloaded only after its SHA-256 digest matches the
     manifest. Missing entries are fatal by design: this provider never invokes
-    a synthesizer and never falls back to a machine-generated voice.
+    a synthesizer and never falls back to a machine-generated voice. Matching
+    is exact after normalization unless a long OCR line has one unique,
+    extremely similar candidate for the same speaker.
     """
 
     name = "recorded-human"
@@ -74,12 +78,14 @@ class RecordedVoiceProvider:
             f"{sha256(raw_bytes).hexdigest()[:16]}"
         )
         self._entries: dict[tuple[str, str], RecordingEntry] = {}
+        self._speaker_entries: dict[str, list[tuple[str, RecordingEntry]]] = {}
         for item in raw.get("entries", []):
             entry = self._parse_entry(item)
             key = self._key(entry.speaker, entry.text)
             if key in self._entries:
                 raise ValueError(f"真人录音包存在重复台词：{entry.speaker}：{entry.text}")
             self._entries[key] = entry
+            self._speaker_entries.setdefault(key[0], []).append((key[1], entry))
         if not self._entries:
             raise ValueError("真人录音包没有任何 entries")
 
@@ -116,7 +122,7 @@ class RecordedVoiceProvider:
         self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
     ) -> tuple[Path, str, str]:
         del profile
-        entry = self._entries.get(self._key(event.speaker, event.text))
+        entry = self._resolve_entry(event.speaker, event.text)
         if entry is None:
             raise RecordingNotFoundError(
                 f"真人录音包中没有匹配台词：{event.speaker}：{event.text}。"
@@ -148,6 +154,33 @@ class RecordedVoiceProvider:
             target.unlink(missing_ok=True)
             raise
 
+    def _resolve_entry(self, speaker: str, text: str) -> RecordingEntry | None:
+        speaker_key, text_key = self._key(speaker, text)
+        exact = self._entries.get((speaker_key, text_key))
+        if exact is not None:
+            return exact
+
+        # Short lines and ambiguous alternatives are deliberately never guessed.
+        # This narrow correction covers common OCR omissions in long subtitles
+        # while preserving the strict no-wrong-line behavior.
+        correction_text = normalize_match_text(text_key)
+        if len(correction_text) < 16:
+            return None
+        candidates: list[tuple[float, RecordingEntry]] = []
+        for expected_text, entry in self._speaker_entries.get(speaker_key, []):
+            expected_correction_text = normalize_match_text(expected_text)
+            if abs(len(expected_correction_text) - len(correction_text)) > 2:
+                continue
+            similarity = ratio(expected_correction_text, correction_text) / 100
+            if similarity >= 0.98:
+                candidates.append((similarity, entry))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        if not candidates:
+            return None
+        if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.015:
+            return None
+        return candidates[0][1]
+
     def _resolve_local(self, relative_path: str) -> Path:
         if Path(relative_path).is_absolute():
             raise ValueError("真人录音包中的 path 必须是相对路径")
@@ -162,7 +195,7 @@ class RecordedVoiceProvider:
     def _download(self, url: str, target: Path) -> None:
         request = Request(
             url,
-            headers={"User-Agent": "GenshinAutoTTS/0.2 (strict recorded-human mode)"},
+            headers={"User-Agent": "GenshinAutoTTS/0.3 (strict recorded-human mode)"},
         )
         with urlopen(request, timeout=self.timeout_seconds) as response, target.open("wb") as out:
             final_url = response.geturl()

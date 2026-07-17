@@ -10,6 +10,52 @@ from .capture import ScreenCapture
 from .models import DialogueObservation, OcrResult, Region
 
 
+@dataclass(frozen=True)
+class NormalizedRegion:
+    """A region expressed as fractions of a complete frame."""
+
+    left: float
+    top: float
+    width: float
+    height: float
+
+    def crop(self, image: Image.Image) -> Image.Image:
+        left = round(image.width * self.left)
+        top = round(image.height * self.top)
+        right = round(image.width * (self.left + self.width))
+        bottom = round(image.height * (self.top + self.height))
+        return image.crop((left, top, right, bottom))
+
+
+@dataclass(frozen=True)
+class DialogueLayout:
+    name: str
+    speaker: NormalizedRegion
+    dialogue: NormalizedRegion
+
+
+@dataclass(frozen=True)
+class FrameOcrResult:
+    layout: str
+    observation: DialogueObservation
+    score: float
+
+
+# Real screenshots show two recurring arrangements. Normal dialogue sits near the
+# bottom edge; dialogue choices and some ultrawide captures move the line upward.
+STANDARD_DIALOGUE_LAYOUT = DialogueLayout(
+    "标准底部对话",
+    NormalizedRegion(0.35, 0.72, 0.30, 0.09),
+    NormalizedRegion(0.20, 0.79, 0.60, 0.13),
+)
+RAISED_DIALOGUE_LAYOUT = DialogueLayout(
+    "上移对话/选项",
+    NormalizedRegion(0.35, 0.55, 0.30, 0.09),
+    NormalizedRegion(0.20, 0.63, 0.60, 0.14),
+)
+GENSHIN_DIALOGUE_LAYOUTS = (STANDARD_DIALOGUE_LAYOUT, RAISED_DIALOGUE_LAYOUT)
+
+
 class OcrEngine(Protocol):
     def recognize(self, image: Image.Image) -> OcrResult: ...
 
@@ -52,6 +98,63 @@ class RapidOcrEngine:
         scores = [float(item[2]) for item in ordered if len(item) > 2]
         confidence = sum(scores) / len(scores) if scores else 0.0
         return OcrResult(text, confidence)
+
+
+def _frame_result_score(speaker: OcrResult, dialogue: OcrResult) -> float:
+    """Prefer confident results shaped like one speaker plus a complete line."""
+
+    speaker_length = len(speaker.text.strip())
+    dialogue_length = len(dialogue.text.strip())
+    score = speaker.confidence + dialogue.confidence * 1.25
+    if 1 <= speaker_length <= 12:
+        score += 0.7
+    elif speaker_length > 20:
+        score -= 0.8
+    if dialogue_length >= 4:
+        score += 1.0
+    elif not dialogue_length:
+        score -= 1.0
+    if dialogue_length > speaker_length:
+        score += 0.25
+    return score
+
+
+def recognize_dialogue_frame(
+    image: Image.Image,
+    ocr: OcrEngine | None = None,
+    layouts: tuple[DialogueLayout, ...] = GENSHIN_DIALOGUE_LAYOUTS,
+) -> FrameOcrResult:
+    """Diagnose a complete screenshot using common Genshin dialogue layouts.
+
+    Runtime capture still uses the user's exact screen regions. This helper is
+    intentionally for imported screenshots, regression checks, and calibration.
+    """
+
+    if not layouts:
+        raise ValueError("At least one dialogue layout is required")
+    engine = ocr or RapidOcrEngine()
+    candidates: list[FrameOcrResult] = []
+    for layout in layouts:
+        speaker = engine.recognize(layout.speaker.crop(image))
+        dialogue = engine.recognize(layout.dialogue.crop(image))
+        observation = DialogueObservation(
+            speaker=speaker.text,
+            text=dialogue.text,
+            speaker_confidence=speaker.confidence,
+            text_confidence=dialogue.confidence,
+        ).with_timestamp()
+        score = _frame_result_score(speaker, dialogue)
+        aspect_ratio = image.width / max(1, image.height)
+        if aspect_ratio >= 2.05 and layout == RAISED_DIALOGUE_LAYOUT:
+            score += 0.35
+        candidates.append(
+            FrameOcrResult(
+                layout=layout.name,
+                observation=observation,
+                score=score,
+            )
+        )
+    return max(candidates, key=lambda item: item.score)
 
 
 class ScriptedOcrEngine:

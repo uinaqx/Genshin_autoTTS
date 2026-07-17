@@ -27,6 +27,7 @@ speaker_profiles.json
 cache/
 logs/
 debug_frames/
+.qa-real-screenshots/
 *.wav
 *.mp3
 *.opus
