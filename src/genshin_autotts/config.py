@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +20,13 @@ class AppConfig:
     repeat_cooldown_seconds: int = 8
     speaker_region: Region | None = None
     dialogue_region: Region | None = None
-    tts_provider: str = "recorded"
+    tts_provider: str = "volcengine"
     voice_pack_manifest: str | None = None
+    speaker_voice_overrides: dict[str, str] = field(default_factory=dict)
+    cloud_timeout_seconds: int = 35
+    cloud_retries: int = 2
+    volcengine_cluster: str = "volcano_tts"
+    aliyun_region: str = "auto"
     cache_max_mb: int = 256
     play_audio: bool = True
     interrupt_audio: bool = True
@@ -37,8 +42,23 @@ class AppConfig:
             raise ValueError("minimum_stable_ms must be non-negative")
         if self.cache_max_mb < 32:
             raise ValueError("cache_max_mb must be at least 32")
-        if self.tts_provider not in {"recorded", "edge"}:
-            raise ValueError("tts_provider must be 'recorded' or 'edge'")
+        if self.tts_provider not in {"volcengine", "aliyun", "recorded", "edge"}:
+            raise ValueError(
+                "tts_provider must be 'volcengine', 'aliyun', 'recorded', or 'edge'"
+            )
+        if self.cloud_timeout_seconds < 5 or self.cloud_timeout_seconds > 120:
+            raise ValueError("cloud_timeout_seconds must be between 5 and 120")
+        if self.cloud_retries < 0 or self.cloud_retries > 5:
+            raise ValueError("cloud_retries must be between 0 and 5")
+        if not self.volcengine_cluster.strip():
+            raise ValueError("volcengine_cluster must not be empty")
+        if self.aliyun_region not in {"auto", "shanghai", "beijing", "shenzhen", "singapore"}:
+            raise ValueError("unsupported aliyun_region")
+        if not isinstance(self.speaker_voice_overrides, dict):
+            raise ValueError("speaker_voice_overrides must be an object")
+        for speaker, voice in self.speaker_voice_overrides.items():
+            if not str(speaker).strip() or not str(voice).strip():
+                raise ValueError("speaker_voice_overrides cannot contain empty names or voices")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -50,6 +70,10 @@ class AppConfig:
         filtered = {key: value for key, value in raw.items() if key in fields}
         if filtered.get("tts_provider") == "sapi":
             filtered["tts_provider"] = "recorded"
+        filtered["speaker_voice_overrides"] = {
+            str(speaker): str(voice)
+            for speaker, voice in (filtered.get("speaker_voice_overrides") or {}).items()
+        }
         filtered["speaker_region"] = Region.from_value(filtered.get("speaker_region"))
         filtered["dialogue_region"] = Region.from_value(filtered.get("dialogue_region"))
         config = cls(**filtered)

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import shutil
+import time
+import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -27,6 +31,247 @@ class TtsProvider(Protocol):
 
 class RecordingNotFoundError(RuntimeError):
     """Raised when strict human-recording mode has no safe matching line."""
+
+
+class CloudTtsError(RuntimeError):
+    """Raised when a configured cloud speech service rejects synthesis."""
+
+
+def _read_limited(response, maximum: int) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > maximum:
+        raise CloudTtsError("云端语音响应超过安全大小上限")
+    payload = response.read(maximum + 1)
+    if len(payload) > maximum:
+        raise CloudTtsError("云端语音响应超过安全大小上限")
+    return payload
+
+
+def _write_audio(target: Path, payload: bytes) -> None:
+    if len(payload) < 128:
+        raise CloudTtsError("云端语音响应为空或不完整")
+    temporary = target.with_suffix(target.suffix + ".part")
+    target.unlink(missing_ok=True)
+    temporary.unlink(missing_ok=True)
+    try:
+        temporary.write_bytes(payload)
+        temporary.replace(target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        raise
+
+
+class VolcengineTtsProvider:
+    """Synthesize one stabilized dialogue line with Volcengine's HTTP TTS API."""
+
+    name = "volcengine"
+    endpoint = "https://openspeech.bytedance.com/api/v1/tts"
+
+    def __init__(
+        self,
+        app_id: str,
+        access_token: str,
+        *,
+        cluster: str = "volcano_tts",
+        timeout_seconds: int = 35,
+        retries: int = 2,
+        max_response_bytes: int = 16 * 1024 * 1024,
+    ) -> None:
+        if not app_id.strip() or not access_token.strip():
+            raise ValueError("火山引擎 App ID 和 Access Token 不能为空")
+        self.app_id = app_id.strip()
+        self.access_token = access_token.strip()
+        self.cluster = cluster.strip()
+        self.timeout_seconds = timeout_seconds
+        self.retries = retries
+        self.max_response_bytes = max_response_bytes
+        app_digest = sha256(self.app_id.encode("utf-8")).hexdigest()[:12]
+        self.cache_namespace = f"{self.name}:http-v1:{app_digest}:{self.cluster}"
+
+    def synthesize(
+        self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
+    ) -> tuple[Path, str, str]:
+        text_bytes = event.text.encode("utf-8")
+        if not text_bytes or len(text_bytes) > 1024:
+            raise CloudTtsError("火山引擎单次合成文本必须为 1～1024 个 UTF-8 字节")
+        if profile.provider != self.name:
+            raise CloudTtsError("角色音色与火山引擎提供商不匹配")
+
+        speed_ratio = max(0.5, min(2.0, 1 + profile.rate_percent / 100))
+        volume_ratio = max(0.5, min(2.0, 1 + profile.volume_percent / 100))
+        request_body = {
+            "app": {
+                "appid": self.app_id,
+                "token": self.access_token,
+                "cluster": self.cluster,
+            },
+            "user": {"uid": "genshin-autotts-local"},
+            "audio": {
+                "voice_type": profile.voice,
+                "encoding": "mp3",
+                "speed_ratio": speed_ratio,
+                "volume_ratio": volume_ratio,
+                "pitch_ratio": 1.0,
+            },
+            "request": {
+                "reqid": str(uuid.uuid4()),
+                "text": event.text,
+                "text_type": "plain",
+                "operation": "query",
+            },
+        }
+        payload = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            self.endpoint,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer;{self.access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": "GenshinAutoTTS/0.4 (Volcengine cloud TTS)",
+            },
+            method="POST",
+        )
+        result = self._request_json(request)
+        code = int(result.get("code", -1))
+        if code != 3000:
+            message = str(result.get("message") or "未知错误")
+            raise CloudTtsError(f"火山引擎合成失败（{code}）：{message}")
+        encoded_audio = result.get("data")
+        if not isinstance(encoded_audio, str) or not encoded_audio:
+            raise CloudTtsError("火山引擎响应缺少音频数据")
+        try:
+            audio = base64.b64decode(encoded_audio, validate=True)
+        except ValueError as exc:
+            raise CloudTtsError("火山引擎返回了无效的 Base64 音频") from exc
+        target = target_base.with_suffix(".mp3")
+        _write_audio(target, audio)
+        return target, "mp3", self.name
+
+    def _request_json(self, request: Request) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    raw = _read_limited(response, self.max_response_bytes)
+                result = json.loads(raw.decode("utf-8"))
+                if not isinstance(result, dict):
+                    raise CloudTtsError("火山引擎返回格式无效")
+                code = int(result.get("code", -1))
+                if code in {3003, 3005, 3030, 3031, 3032, 3040} and attempt < self.retries:
+                    time.sleep(0.25 * (2**attempt))
+                    continue
+                return result
+            except (HTTPError, URLError, TimeoutError, OSError, UnicodeError, ValueError) as exc:
+                last_error = exc
+                retryable = not isinstance(exc, HTTPError) or exc.code == 429 or exc.code >= 500
+                if attempt >= self.retries or not retryable:
+                    break
+                time.sleep(0.25 * (2**attempt))
+        raise CloudTtsError(f"无法连接火山引擎语音服务：{last_error}") from last_error
+
+
+class AliyunTtsProvider:
+    """Synthesize one stabilized dialogue line with Alibaba Cloud NLS REST."""
+
+    name = "aliyun"
+    endpoints = {
+        "auto": "https://nls-gateway.aliyuncs.com/stream/v1/tts",
+        "shanghai": "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts",
+        "beijing": "https://nls-gateway-cn-beijing.aliyuncs.com/stream/v1/tts",
+        "shenzhen": "https://nls-gateway-cn-shenzhen.aliyuncs.com/stream/v1/tts",
+        "singapore": "https://nls-gateway-ap-southeast-1.aliyuncs.com/stream/v1/tts",
+    }
+
+    def __init__(
+        self,
+        app_key: str,
+        access_token: str,
+        *,
+        region: str = "auto",
+        timeout_seconds: int = 35,
+        retries: int = 2,
+        max_response_bytes: int = 16 * 1024 * 1024,
+    ) -> None:
+        if not app_key.strip() or not access_token.strip():
+            raise ValueError("阿里云 AppKey 和 Access Token 不能为空")
+        if region not in self.endpoints:
+            raise ValueError(f"不支持的阿里云地域：{region}")
+        self.app_key = app_key.strip()
+        self.access_token = access_token.strip()
+        self.endpoint = self.endpoints[region]
+        self.region = region
+        self.timeout_seconds = timeout_seconds
+        self.retries = retries
+        self.max_response_bytes = max_response_bytes
+        app_digest = sha256(self.app_key.encode("utf-8")).hexdigest()[:12]
+        self.cache_namespace = f"{self.name}:nls-rest:{app_digest}:{region}"
+
+    def synthesize(
+        self, event: DialogueEvent, profile: VoiceProfile, target_base: Path
+    ) -> tuple[Path, str, str]:
+        if not event.text or len(event.text) > 300:
+            raise CloudTtsError("阿里云 NLS 单次合成文本必须为 1～300 个字符")
+        if profile.provider != self.name:
+            raise CloudTtsError("角色音色与阿里云提供商不匹配")
+
+        body = {
+            "appkey": self.app_key,
+            "token": self.access_token,
+            "text": event.text,
+            "format": "mp3",
+            "sample_rate": 16000,
+            "voice": profile.voice,
+            "volume": max(0, min(100, 50 + profile.volume_percent)),
+            "speech_rate": max(-500, min(500, profile.rate_percent * 5)),
+            "pitch_rate": 0,
+        }
+        request = Request(
+            self.endpoint,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "GenshinAutoTTS/0.4 (Aliyun NLS TTS)",
+            },
+            method="POST",
+        )
+        audio = self._request_audio(request)
+        target = target_base.with_suffix(".mp3")
+        _write_audio(target, audio)
+        return target, "mp3", self.name
+
+    def _request_audio(self, request: Request) -> bytes:
+        last_error: Exception | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    content_type = (response.headers.get("Content-Type") or "").lower()
+                    payload = _read_limited(response, self.max_response_bytes)
+                if content_type.startswith("audio/"):
+                    return payload
+                detail = self._error_detail(payload)
+                raise CloudTtsError(f"阿里云合成失败：{detail}")
+            except CloudTtsError:
+                raise
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+                last_error = exc
+                retryable = not isinstance(exc, HTTPError) or exc.code == 429 or exc.code >= 500
+                if attempt >= self.retries or not retryable:
+                    break
+                time.sleep(0.25 * (2**attempt))
+        raise CloudTtsError(f"无法连接阿里云语音服务：{last_error}") from last_error
+
+    @staticmethod
+    def _error_detail(payload: bytes) -> str:
+        try:
+            result = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, ValueError):
+            return payload[:240].decode("utf-8", errors="replace") or "未知错误"
+        if isinstance(result, dict):
+            status = result.get("status")
+            message = result.get("message") or result.get("result") or "未知错误"
+            return f"{status} {message}".strip()
+        return "未知错误"
 
 
 @dataclass(frozen=True)

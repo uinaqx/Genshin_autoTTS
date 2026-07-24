@@ -44,3 +44,28 @@ def test_recorded_mode_uses_human_profile_without_generating_voice_mapping(tmp_p
     assert profile.provider == "recorded"
     assert profile.voice == "真人示例"
     assert not path.exists()
+
+
+def test_cloud_voice_assignment_is_fixed_per_speaker_and_provider(tmp_path) -> None:
+    path = tmp_path / "profiles.json"
+    first = VoiceRegistry(path, "aliyun")
+    profile = first.resolve("派蒙")
+    second = VoiceRegistry(path, "aliyun")
+
+    assert second.resolve("派蒙") == profile
+    assert profile.provider == "aliyun"
+    assert profile.gender == "female"
+
+
+def test_speaker_voice_override_replaces_previous_assignment(tmp_path) -> None:
+    path = tmp_path / "profiles.json"
+    original = VoiceRegistry(path, "volcengine").resolve("测试角色")
+    overridden = VoiceRegistry(
+        path,
+        "volcengine",
+        {"测试角色": "custom_voice_type"},
+    ).resolve("测试角色")
+
+    assert overridden.provider == "volcengine"
+    assert overridden.voice == "custom_voice_type"
+    assert overridden != original

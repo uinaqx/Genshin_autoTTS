@@ -15,7 +15,7 @@ from .text import DialogueStabilizer
 def run_demo(
     speaker: str,
     text: str,
-    provider: str = "recorded",
+    provider: str = "volcengine",
     play: bool = False,
     voice_pack_manifest: str | None = None,
 ):

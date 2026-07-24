@@ -64,6 +64,8 @@ def test_formal_window_builds_without_clipped_controls(tmp_path, monkeypatch) ->
         assert app.start_button.winfo_width() >= 120
         assert app.stop_button.winfo_height() >= 40
         assert app.log.winfo_height() >= 70
+        assert app.provider_var.get() == "火山引擎"
+        assert app.config.tts_provider == "volcengine"
 
         app._apply_fullscreen_preset()
         assert app.config.speaker_region is not None

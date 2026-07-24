@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genshin-autotts"
-version = "0.3.0"
+version = "0.4.0"
 description = "Screen OCR driven, lightweight automatic voice-over companion for games"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "Genshin_autoTTS contributors" }]
-keywords = ["ocr", "voice-over", "accessibility", "game", "recorded-voice"]
+keywords = ["ocr", "voice-over", "accessibility", "game", "cloud-tts"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: MIT License",

@@ -18,12 +18,16 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command")
     sub.add_parser("gui", help="启动桌面界面")
     demo = sub.add_parser("demo", help="不截图，直接测试音色、TTS、缓存与播放")
-    demo.add_argument("--speaker", default="真人示例")
-    demo.add_argument("--text", default="zero")
-    demo.add_argument("--provider", choices=["recorded", "edge"], default="recorded")
+    demo.add_argument("--speaker", default="派蒙")
+    demo.add_argument("--text", default="我们出发吧。")
+    demo.add_argument(
+        "--provider",
+        choices=["volcengine", "aliyun", "recorded", "edge"],
+        default="volcengine",
+    )
     demo.add_argument("--voice-pack", help="真人录音包 manifest.json 路径")
     demo.add_argument("--play", action="store_true")
-    sub.add_parser("smoke", help="运行真实 OCR + 真人录音 + 缓存冒烟测试")
+    sub.add_parser("smoke", help="运行真实 OCR + 诊断录音 + 缓存冒烟测试")
     fixture = sub.add_parser("fixture", help="启动真实布局模拟场景或本地截图播放器")
     fixture.add_argument("--images", help="依次播放指定目录中的本地截图")
     fixture.add_argument("--interval-ms", type=int, default=3500, help="自动播放间隔")

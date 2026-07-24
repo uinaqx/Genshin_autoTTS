@@ -9,9 +9,11 @@ import pytest
 
 from genshin_autotts.models import DialogueEvent, VoiceProfile
 from genshin_autotts.tts import (
+    AliyunTtsProvider,
     EdgeTtsProvider,
     RecordedVoiceProvider,
     RecordingNotFoundError,
+    VolcengineTtsProvider,
 )
 
 
@@ -222,3 +224,103 @@ def test_neural_voice_failure_never_falls_back_to_machine_voice(tmp_path, monkey
         provider.synthesize(_event(text="风从山谷吹来。"), profile, tmp_path / "line")
 
     assert not (tmp_path / "line.mp3").exists()
+
+
+class _CloudResponse:
+    def __init__(self, payload: bytes, content_type: str) -> None:
+        self.payload = payload
+        self.headers = {
+            "Content-Length": str(len(payload)),
+            "Content-Type": content_type,
+        }
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self.payload if size < 0 else self.payload[:size]
+
+
+def test_volcengine_provider_requests_selected_voice_and_decodes_audio(
+    tmp_path, monkeypatch
+) -> None:
+    audio = b"ID3" + b"\x01" * 1024
+    response = json.dumps(
+        {
+            "reqid": "request-id",
+            "code": 3000,
+            "message": "Success",
+            "sequence": -1,
+            "data": __import__("base64").b64encode(audio).decode("ascii"),
+        }
+    ).encode("utf-8")
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _CloudResponse(response, "application/json")
+
+    monkeypatch.setattr("genshin_autotts.tts.urlopen", fake_urlopen)
+    provider = VolcengineTtsProvider("app-id", "access-token", retries=0)
+    profile = VoiceProfile(
+        "volc_bright_female",
+        "volcengine",
+        "BV001_streaming",
+        "female",
+        "young",
+        "bright",
+        7,
+    )
+
+    path, codec, origin = provider.synthesize(
+        _event(speaker="派蒙", text="我们出发吧。"),
+        profile,
+        tmp_path / "volc",
+    )
+
+    body = json.loads(captured["request"].data.decode("utf-8"))
+    assert captured["request"].get_header("Authorization") == "Bearer;access-token"
+    assert body["audio"]["voice_type"] == "BV001_streaming"
+    assert body["request"]["text"] == "我们出发吧。"
+    assert path.read_bytes() == audio
+    assert (codec, origin) == ("mp3", "volcengine")
+
+
+def test_aliyun_provider_posts_text_and_accepts_audio_response(tmp_path, monkeypatch) -> None:
+    audio = b"ID3" + b"\x02" * 1024
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _CloudResponse(audio, "audio/mpeg")
+
+    monkeypatch.setattr("genshin_autotts.tts.urlopen", fake_urlopen)
+    provider = AliyunTtsProvider("app-key", "access-token", retries=0)
+    profile = VoiceProfile(
+        "aliyun_calm_female",
+        "aliyun",
+        "zhixiaobai",
+        "female",
+        "adult",
+        "calm",
+        -4,
+    )
+
+    path, codec, origin = provider.synthesize(
+        _event(speaker="旁白", text="风从山谷吹来。"),
+        profile,
+        tmp_path / "aliyun",
+    )
+
+    body = json.loads(captured["request"].data.decode("utf-8"))
+    assert body["appkey"] == "app-key"
+    assert body["token"] == "access-token"
+    assert body["voice"] == "zhixiaobai"
+    assert body["text"] == "风从山谷吹来。"
+    assert path.read_bytes() == audio
+    assert (codec, origin) == ("mp3", "aliyun")

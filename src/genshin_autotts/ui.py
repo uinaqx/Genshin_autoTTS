@@ -17,6 +17,7 @@ from . import __version__
 from .cache import AudioCache
 from .capture import MssScreenCapture
 from .config import app_home, load_config, save_config
+from .credentials import CredentialStore
 from .models import DialogueEvent, Region
 from .ocr import RapidOcrEngine, STANDARD_DIALOGUE_LAYOUT, recognize_dialogue_frame
 from .runtime import build_controller, build_voice_pipeline
@@ -40,6 +41,14 @@ COLORS = {
     "danger": "#FB7185",
     "warning": "#FBBF24",
 }
+
+PROVIDER_LABELS = {
+    "volcengine": "火山引擎",
+    "aliyun": "阿里云",
+    "recorded": "真人录音包（兼容）",
+    "edge": "Microsoft Edge（实验）",
+}
+PROVIDER_KEYS = {label: key for key, label in PROVIDER_LABELS.items()}
 
 
 def format_region(region: Region | None) -> str:
@@ -161,7 +170,7 @@ class RegionSelector:
 class MainWindow:
     def __init__(self) -> None:
         self.config = load_config()
-        self.config.tts_provider = "recorded"
+        self.credential_store = CredentialStore(app_home() / "credentials.dat")
         self.controller = None
         self.root = tk.Tk()
         self.root.title(f"Genshin AutoVoice {__version__}")
@@ -170,17 +179,21 @@ class MainWindow:
         self.root.configure(bg=COLORS["background"])
 
         self.cache_var = tk.StringVar(value=str(self.config.cache_max_mb))
+        self.provider_var = tk.StringVar(
+            value=PROVIDER_LABELS.get(self.config.tts_provider, PROVIDER_LABELS["volcengine"])
+        )
         self.voice_pack_var = tk.StringVar(value=self.config.voice_pack_manifest or "")
-        self.voice_pack_info_var = tk.StringVar(value=voice_pack_summary(self.voice_pack_var.get()))
+        self.voice_pack_info_var = tk.StringVar(value="")
         self.speaker_region_var = tk.StringVar(value=format_region(self.config.speaker_region))
         self.dialogue_region_var = tk.StringVar(value=format_region(self.config.dialogue_region))
         self.status_var = tk.StringVar(value="等待配置")
         self.status_detail_var = tk.StringVar(value="设置识别区域后即可开始自动配音")
-        self.test_speaker = tk.StringVar(value="真人示例")
-        self.test_text = tk.StringVar(value="zero")
+        self.test_speaker = tk.StringVar(value="派蒙")
+        self.test_text = tk.StringVar(value="我们出发吧。")
         self._build_styles()
         self._build()
         self._refresh_region_state()
+        self._refresh_provider_info()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
     def _build_styles(self) -> None:
@@ -232,6 +245,15 @@ class MainWindow:
             padding=(9, 8),
         )
         style.map("Dark.TEntry", bordercolor=[("focus", COLORS["accent"])])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground="#0C1728",
+            foreground=COLORS["text"],
+            background=COLORS["card_alt"],
+            bordercolor=COLORS["border"],
+            arrowcolor=COLORS["accent"],
+            padding=(9, 8),
+        )
 
     def _build(self) -> None:
         shell = tk.Frame(self.root, bg=COLORS["background"])
@@ -244,7 +266,7 @@ class MainWindow:
         sidebar.grid_propagate(False)
         self._build_sidebar(sidebar)
 
-        main = tk.Frame(shell, bg=COLORS["background"], padx=26, pady=22)
+        main = tk.Frame(shell, bg=COLORS["background"], padx=26, pady=18)
         main.grid(row=0, column=1, sticky="nsew")
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(3, weight=1)
@@ -285,21 +307,21 @@ class MainWindow:
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(anchor="w", padx=24, pady=(0, 10))
         self.sidebar_region_state = self._sidebar_step(parent, "1", "识别区域", "等待设置")
-        self.sidebar_pack_state = self._sidebar_step(parent, "2", "真人录音包", "诊断包可用")
+        self.sidebar_pack_state = self._sidebar_step(parent, "2", "语音服务", "等待配置")
         self.sidebar_run_state = self._sidebar_step(parent, "3", "自动配音", "尚未运行")
 
         privacy = tk.Frame(parent, bg=COLORS["card_alt"], padx=16, pady=14)
         privacy.pack(side="bottom", fill="x", padx=18, pady=18)
         tk.Label(
             privacy,
-            text="●  本地隐私模式",
+            text="●  本地识别 · 云端合成",
             bg=COLORS["card_alt"],
             fg=COLORS["success"],
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(anchor="w")
         tk.Label(
             privacy,
-            text="只读取屏幕像素，不注入进程；\n截图与 OCR 结果不会上传。",
+            text="截图、OCR 与角色匹配在本机完成；\n仅将稳定台词和音色 ID 发给语音服务。",
             bg=COLORS["card_alt"],
             fg=COLORS["muted"],
             justify="left",
@@ -349,7 +371,7 @@ class MainWindow:
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
             header,
-            text="配置识别范围、录音资源并监控每一条剧情语音",
+            text="本地识别角色与字幕，匹配固定音色后请求云端生成语音",
             bg=COLORS["background"],
             fg=COLORS["muted"],
             font=("Microsoft YaHei UI", 10),
@@ -417,29 +439,42 @@ class MainWindow:
             style="Secondary.TButton",
         ).pack(side="left", padx=(8, 0))
 
-        pack_card, pack = self._card(grid, "真人录音资源", "严格匹配角色与完整台词，缺失时拒绝合成")
+        pack_card, pack = self._card(
+            grid,
+            "云端语音服务",
+            "选择开放平台；同一角色会复用本地保存的固定音色",
+        )
         pack_card.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
         mode = tk.Frame(pack, bg=COLORS["card_alt"], padx=11, pady=8)
         mode.pack(fill="x")
-        tk.Label(
+        provider_box = ttk.Combobox(
             mode,
-            text="●  严格真人录音模式",
-            bg=COLORS["card_alt"],
-            fg=COLORS["success"],
-            font=("Microsoft YaHei UI", 9, "bold"),
-        ).pack(side="left")
-        tk.Label(
+            textvariable=self.provider_var,
+            values=list(PROVIDER_LABELS.values()),
+            state="readonly",
+            width=22,
+            style="Dark.TCombobox",
+        )
+        provider_box.pack(side="left", fill="x", expand=True)
+        provider_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh_provider_info())
+        ttk.Button(
             mode,
-            text="无合成回退",
-            bg=COLORS["card_alt"],
-            fg=COLORS["muted"],
-            font=("Microsoft YaHei UI", 9),
-        ).pack(side="right")
+            text="配置 API",
+            command=self._open_cloud_settings,
+            style="Secondary.TButton",
+        ).pack(side="right", padx=(8, 0))
         manifest_row = tk.Frame(pack, bg=COLORS["card"])
         manifest_row.pack(fill="x", pady=(10, 4))
+        tk.Label(
+            manifest_row,
+            text="兼容录音包",
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side="left", padx=(0, 7))
         entry = ttk.Entry(manifest_row, textvariable=self.voice_pack_var, style="Dark.TEntry")
         entry.pack(side="left", fill="x", expand=True)
-        entry.bind("<FocusOut>", lambda _event: self._refresh_voice_pack_info())
+        entry.bind("<FocusOut>", lambda _event: self._refresh_provider_info())
         ttk.Button(
             manifest_row,
             text="选择清单",
@@ -534,10 +569,19 @@ class MainWindow:
         test.grid(row=0, column=3, rowspan=2, sticky="e")
         ttk.Entry(test, textvariable=self.test_speaker, width=11, style="Dark.TEntry").pack(side="left")
         ttk.Entry(test, textvariable=self.test_text, width=23, style="Dark.TEntry").pack(side="left", padx=7)
-        ttk.Button(test, text="测试录音", command=self._test_pipeline, style="Secondary.TButton").pack(side="left")
+        ttk.Button(
+            test,
+            text="测试语音",
+            command=self._test_pipeline,
+            style="Secondary.TButton",
+        ).pack(side="left")
 
     def _build_log_card(self, parent: tk.Frame) -> None:
-        card, body = self._card(parent, "运行与诊断日志", "OCR、录音匹配、缓存和播放状态会按时间记录")
+        card, body = self._card(
+            parent,
+            "运行与诊断日志",
+            "OCR、音色匹配、云端生成、缓存和播放状态会按时间记录",
+        )
         card.grid(row=3, column=0, sticky="nsew")
         toolbar = tk.Frame(body, bg=COLORS["card"])
         toolbar.pack(fill="x", pady=(0, 9))
@@ -575,7 +619,10 @@ class MainWindow:
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self._append_log("系统", "正式版界面已就绪；截图与 OCR 均在本机处理。")
+        self._append_log(
+            "系统",
+            "界面已就绪；截图与 OCR 在本机处理，稳定台词按需发送给所选云端语音服务。",
+        )
 
     def _refresh_region_state(self) -> None:
         self.speaker_region_var.set(format_region(self.config.speaker_region))
@@ -598,14 +645,151 @@ class MainWindow:
                 fg=COLORS["success"] if ready else COLORS["muted"],
             )
 
-    def _refresh_voice_pack_info(self) -> None:
-        summary = voice_pack_summary(self.voice_pack_var.get())
+    def _refresh_provider_info(self) -> None:
+        provider = PROVIDER_KEYS.get(self.provider_var.get(), "volcengine")
+        if provider == "recorded":
+            summary = voice_pack_summary(self.voice_pack_var.get())
+            healthy = summary not in {"清单文件不存在", "清单格式无法读取"}
+        elif provider == "edge":
+            summary = "无需 API 凭据 · 文本会发送至 Microsoft 在线语音服务"
+            healthy = True
+        else:
+            try:
+                healthy = self.credential_store.has_provider(provider)
+                summary = (
+                    "API 凭据已使用 Windows DPAPI 加密保存"
+                    if healthy
+                    else "尚未配置 API 凭据"
+                )
+            except Exception as exc:
+                healthy = False
+                summary = f"凭据读取失败：{exc}"
         self.voice_pack_info_var.set(summary)
-        healthy = summary not in {"清单文件不存在", "清单格式无法读取"}
         self.sidebar_pack_state.configure(
-            text="资源清单可用" if healthy else summary,
+            text=f"{PROVIDER_LABELS[provider]}已就绪" if healthy else summary,
             fg=COLORS["success"] if healthy else COLORS["danger"],
         )
+
+    def _open_cloud_settings(self) -> None:
+        provider = PROVIDER_KEYS.get(self.provider_var.get(), "volcengine")
+        if provider == "recorded":
+            messagebox.showinfo(
+                "真人录音兼容模式",
+                "此模式仍使用下方 manifest.json 录音清单，不需要 API 凭据。",
+                parent=self.root,
+            )
+            return
+        if provider == "edge":
+            messagebox.showinfo(
+                "Edge 实验模式",
+                "此模式不需要单独申请 API，但不属于本项目的主要云平台接入路径。",
+                parent=self.root,
+            )
+            return
+
+        try:
+            current = self.credential_store.get_provider(provider)
+        except Exception as exc:
+            messagebox.showerror("无法读取凭据", str(exc), parent=self.root)
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title(f"配置 {PROVIDER_LABELS[provider]} API")
+        window.geometry("520x330")
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.grab_set()
+        window.configure(bg=COLORS["background"])
+
+        shell = tk.Frame(window, bg=COLORS["background"], padx=24, pady=22)
+        shell.pack(fill="both", expand=True)
+        tk.Label(
+            shell,
+            text=f"{PROVIDER_LABELS[provider]} API 凭据",
+            bg=COLORS["background"],
+            fg=COLORS["text"],
+            font=("Microsoft YaHei UI", 16, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            shell,
+            text="凭据仅在当前 Windows 用户下加密保存，不会写入 config.json。",
+            bg=COLORS["background"],
+            fg=COLORS["muted"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(anchor="w", pady=(4, 16))
+
+        definitions = (
+            [("App ID", "app_id", False), ("Access Token", "access_token", True)]
+            if provider == "volcengine"
+            else [("AppKey", "app_key", False), ("Access Token", "access_token", True)]
+        )
+        variables: dict[str, tk.StringVar] = {}
+        form = tk.Frame(shell, bg=COLORS["background"])
+        form.pack(fill="x")
+        form.grid_columnconfigure(1, weight=1)
+        for row, (label, key, secret) in enumerate(definitions):
+            tk.Label(
+                form,
+                text=label,
+                bg=COLORS["background"],
+                fg=COLORS["muted"],
+                width=14,
+                anchor="w",
+                font=("Microsoft YaHei UI", 10),
+            ).grid(row=row, column=0, sticky="w", pady=6)
+            variable = tk.StringVar(value=current.get(key, ""))
+            variables[key] = variable
+            ttk.Entry(
+                form,
+                textvariable=variable,
+                show="●" if secret else "",
+                style="Dark.TEntry",
+            ).grid(row=row, column=1, sticky="ew", pady=6)
+
+        hint = (
+            "火山引擎：在豆包语音控制台创建应用，并取得 APP ID 与 Access Token。"
+            if provider == "volcengine"
+            else "阿里云：在智能语音交互控制台创建项目，并取得 AppKey 与 Access Token。"
+        )
+        tk.Label(
+            shell,
+            text=hint,
+            wraplength=465,
+            justify="left",
+            bg=COLORS["background"],
+            fg=COLORS["gold"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(anchor="w", pady=(12, 0))
+
+        actions = tk.Frame(shell, bg=COLORS["background"])
+        actions.pack(side="bottom", fill="x")
+
+        def save_credentials() -> None:
+            try:
+                self.credential_store.save_provider(
+                    provider,
+                    {key: variable.get() for key, variable in variables.items()},
+                )
+                self.config.tts_provider = provider
+                save_config(self.config)
+                self._refresh_provider_info()
+                window.destroy()
+                self._status(f"{PROVIDER_LABELS[provider]} API 凭据已安全保存")
+            except Exception as exc:
+                messagebox.showerror("保存失败", str(exc), parent=window)
+
+        ttk.Button(
+            actions,
+            text="取消",
+            command=window.destroy,
+            style="Secondary.TButton",
+        ).pack(side="right")
+        ttk.Button(
+            actions,
+            text="加密保存",
+            command=save_credentials,
+            style="Accent.TButton",
+        ).pack(side="right", padx=(0, 8))
 
     def _select_speaker(self) -> None:
         selector = RegionSelector(self.root, "框选角色名区域")
@@ -646,11 +830,14 @@ class MainWindow:
 
     def _save_settings(self, show_status: bool = True) -> bool:
         try:
-            self.config.tts_provider = "recorded"
+            self.config.tts_provider = PROVIDER_KEYS.get(
+                self.provider_var.get(),
+                "volcengine",
+            )
             self.config.voice_pack_manifest = self.voice_pack_var.get().strip() or None
             self.config.cache_max_mb = int(self.cache_var.get())
             save_config(self.config)
-            self._refresh_voice_pack_info()
+            self._refresh_provider_info()
             if show_status:
                 self._status("设置已保存")
             return True
@@ -666,7 +853,7 @@ class MainWindow:
         )
         if selected:
             self.voice_pack_var.set(selected)
-            self._refresh_voice_pack_info()
+            self._refresh_provider_info()
 
     def _start(self) -> None:
         try:
@@ -681,7 +868,7 @@ class MainWindow:
             self.sidebar_run_state.configure(text="正在监听屏幕", fg=COLORS["success"])
             self.status_pill.configure(text="●  运行中", bg="#12352F", fg=COLORS["success"])
             self.status_var.set("正在监听剧情字幕")
-            self.status_detail_var.set("识别稳定后会严格匹配真人录音并自动播放")
+            self.status_detail_var.set("识别稳定后会匹配固定音色、请求云端生成并自动播放")
         except Exception as exc:
             messagebox.showerror("无法启动", str(exc), parent=self.root)
 
@@ -702,7 +889,7 @@ class MainWindow:
 
         def work() -> None:
             try:
-                self._status(f"测试录音匹配：{speaker}｜{text}")
+                self._status(f"测试语音生成：{speaker}｜{text}")
                 pipeline = build_voice_pipeline(self.config)
                 event = DialogueEvent(speaker, text, datetime.now(timezone.utc))
                 artifact = pipeline.process(event)
